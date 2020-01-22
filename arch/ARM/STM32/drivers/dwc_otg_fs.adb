@@ -34,6 +34,7 @@ with Ada.Text_IO;
 with System.Storage_Elements;  use System.Storage_Elements;
 with Ada.Unchecked_Conversion;
 with Hex_Dump;
+with STM32.USB; use STM32.USB;
 
 package body DWC_OTG_FS is
 
@@ -56,136 +57,8 @@ package body DWC_OTG_FS is
       end if;
    end Put_Line;
 
-   function Valid (EP : EP_Id) return Boolean;
-   procedure Flush_RX_FIFO;
-   procedure Flush_TX_FIFO;
-   procedure Disable_Interrupt;
-   procedure Enable_Interrupt;
-   procedure USB_Disconnect;
-   procedure USB_Connect;
-   procedure Set_RX_Fifo (Size : UInt16);
-   procedure Set_TX_Fifo (This : in out OTG_USB_Device;
-                          Ep   : EP_Id;
-                          Size : UInt16);
    procedure Device_Init;
    procedure EP0_Out_Start (This : in out OTG_USB_Device);
-
-   -----------
-   -- Valid --
-   -----------
-
-   function Valid (EP : EP_Id) return Boolean
-   is (EP <= EP_Id (All_EP_Index'Last));
-
-   -------------------
-   -- Flush_RX_FIFO --
-   -------------------
-
-   procedure Flush_RX_FIFO is
-   begin
-      GLOBAL_Periph.GRSTCTL.RXFFLSH := True;
-      GLOBAL_Periph.GRSTCTL.RXFFLSH := True;
-
-      while GLOBAL_Periph.GRSTCTL.RXFFLSH loop
-         null;
-      end loop;
-   end Flush_RX_FIFO;
-
-   -------------------
-   -- Flush_TX_FIFO --
-   -------------------
-
-   procedure Flush_TX_FIFO is
-   begin
-
-      --  Flush all FIFO
-      GLOBAL_Periph.GRSTCTL.TXFNUM := 2#10000#;
-
-      GLOBAL_Periph.GRSTCTL.TXFFLSH := True;
-
-      while GLOBAL_Periph.GRSTCTL.TXFFLSH loop
-         null;
-      end loop;
-   end Flush_TX_FIFO;
-
-   -----------------------
-   -- Disable_Interrupt --
-   -----------------------
-
-   procedure Disable_Interrupt is
-   begin
-      GLOBAL_Periph.GAHBCFG.GINT := False;
-   end Disable_Interrupt;
-
-   ----------------------
-   -- Enable_Interrupt --
-   ----------------------
-
-   procedure Enable_Interrupt is
-   begin
-      GLOBAL_Periph.GAHBCFG.GINT := True;
-   end Enable_Interrupt;
-
-   --------------------
-   -- USB_Disconnect --
-   --------------------
-
-   procedure USB_Disconnect is
-   begin
-      DEVICE_Periph.DCTL.SDIS := True;
-   end USB_Disconnect;
-
-   -----------------
-   -- USB_Connect --
-   -----------------
-
-   procedure USB_Connect is
-   begin
-      DEVICE_Periph.DCTL.SDIS := False;
-   end USB_Connect;
-
-   -----------------
-   -- Set_RX_Fifo --
-   -----------------
-
-   procedure Set_RX_Fifo (Size : UInt16) is
-   begin
-      GLOBAL_Periph.GRXFSIZ.RXFD := Size;
-   end Set_RX_Fifo;
-
-   -----------------
-   -- Set_TX_Fifo --
-   -----------------
-
-   procedure Set_TX_Fifo (This : in out OTG_USB_Device;
-                          Ep   : EP_Id;
-                          Size : UInt16) is
-      pragma Unreferenced (This);
-      TX_Offset : UInt16 := GLOBAL_Periph.GRXFSIZ.RXFD;
-   begin
-
-      if not Valid (Ep) then
-         raise Program_Error with "invalid EP in Set_TX_Fifo";
-      end if;
-
-      if Ep = 0 then
-         GLOBAL_Periph.HPTXFSIZ.PTXFD := Size;
-         GLOBAL_Periph.HPTXFSIZ.PTXSA := TX_Offset;
-      else
-         TX_Offset := TX_Offset + GLOBAL_Periph.HPTXFSIZ.PTXFD;
-
-         for Index in TX_Fifo_Index loop
-            if TX_Fifo_Index (All_EP_Index (Ep)) >= Index then
-               TX_Offset := TX_Offset + GLOBAL_Periph.DIEPTXF (Index).INEPTXFD;
-            else
-               exit;
-            end if;
-         end loop;
-
-         GLOBAL_Periph.DIEPTXF (TX_Fifo_Index (Ep)).INEPTXSA := TX_Offset;
-         GLOBAL_Periph.DIEPTXF (TX_Fifo_Index (Ep)).INEPTXFD := Size;
-      end if;
-   end Set_TX_Fifo;
 
    -------------------
    -- EP0_Out_Start --
@@ -225,35 +98,9 @@ package body DWC_OTG_FS is
    procedure Initialize (This : in out OTG_USB_Device) is
    begin
 
-      Disable_Interrupt;
+      Core_Init;
 
-      --  Using embedded PHY
-      GLOBAL_Periph.GUSBCFG.PHYSEL := True;
-
-      --  Wait for AHB idle
-      while not GLOBAL_Periph.GRSTCTL.AHBIDL loop
-         null;
-      end loop;
-
-      --  Do core soft reset
-      GLOBAL_Periph.GRSTCTL.CSRST := True;
-      while GLOBAL_Periph.GRSTCTL.CSRST loop
-         null;
-      end loop;
-
-      --  Enable VBUS sensing in device mode and power up the PHY
-      GLOBAL_Periph.GCCFG := (PWRDWN => True,
-                              others => <>);
-      --  End of core init
-
-      --  Clear mode
-      GLOBAL_Periph.GUSBCFG.FHMOD := False;
-      GLOBAL_Periph.GUSBCFG.FDMOD := False;
-
-      --  Set device mode
-      GLOBAL_Periph.GUSBCFG.FDMOD := True;
-
-      delay until Clock + Milliseconds (50);
+      Set_Mode (Is_Device => True);
 
       --  USB_DevInit...
       Device_Init;
