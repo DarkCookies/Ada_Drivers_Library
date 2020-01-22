@@ -67,6 +67,7 @@ package body DWC_OTG_FS is
    procedure Set_TX_Fifo (This : in out OTG_USB_Device;
                           Ep   : EP_Id;
                           Size : UInt16);
+   procedure Device_Init;
    procedure EP0_Out_Start (This : in out OTG_USB_Device);
 
    -----------
@@ -255,7 +256,7 @@ package body DWC_OTG_FS is
       delay until Clock + Milliseconds (50);
 
       --  USB_DevInit...
-
+      Device_Init;
       --  Enable VBUS sensing
 
       --  VBus sensing depends on the version of the OTG controller
@@ -290,100 +291,13 @@ package body DWC_OTG_FS is
       Flush_RX_FIFO;
       Flush_TX_FIFO;
 
-      --  Clear all device interrupts
-      DEVICE_Periph.DIEPMSK :=
-        (XFRCM     => False,
-         EPDM      => False,
-         TOM       => False,
-         ITTXFEMSK => False,
-         INEPNMM   => False,
-         INEPNEM   => False,
-         others    => <>);
-      DEVICE_Periph.DOEPMSK :=
-        (XFRCM  => False,
-         EPDM   => False,
-         STUPM  => False,
-         OTEPDM => False,
-         others    => <>);
-      DEVICE_Periph.DAINT := (16#FFFF#, 16#FFFF#);
-      DEVICE_Periph.DAINTMSK := (0, 0);
-
-      if DEVICE_Periph.DIEPCTL0.EPENA then
-         DEVICE_Periph.DIEPCTL0 := (EPDIS  => True,
-                                              SNAK   => True,
-                                              others => <>);
-      else
-         DEVICE_Periph.DIEPCTL0 := (others => <>);
-      end if;
-      DEVICE_Periph.DIEPTSIZ0 := (others => <>);
-      DEVICE_Periph.DIEPINT0 :=
-        (XFRC   => True,
-         EPDISD => True,
-         TOC    => True,
-         ITTXFE => True,
-         INEPNE => True,
-         TXFE   => True,
-         others => <>);
-
-      -- In End Points --
-      for Ep in EP_Index loop
-         if DEVICE_Periph.IEP (Ep).CTL.EPENA then
-            DEVICE_Periph.IEP (Ep).CTL := (EPDIS  => True,
-                                           SNAK   => True,
-                                           others => <>);
-         else
-            DEVICE_Periph.IEP (Ep).CTL := (others => <>);
-         end if;
-         DEVICE_Periph.IEP (Ep).SIZ := (others => <>);
-         DEVICE_Periph.IEP (Ep).INT :=
-           (XFRC   => True,
-            EPDISD => True,
-            TOC    => True,
-            ITTXFE => True,
-            INEPNE => True,
-            TXFE   => True,
-            others => <>);
-      end loop;
-
-      if DEVICE_Periph.DOEPCTL0.EPENA then
-         DEVICE_Periph.DOEPCTL0 := (EPDIS  => True,
-                                              SNAK   => True,
-                                              others => <>);
-      else
-         DEVICE_Periph.DOEPCTL0 := (others => <>);
-      end if;
-
-      DEVICE_Periph.DOEPTSIZ0 := (others => <>);
-      DEVICE_Periph.DOEPINT0 :=
-        (XFRC   => True,
-         EPDISD => True,
-         STUP    => True,
-         OTEPDIS => True,
-         B2BSTUP => True,
-         others => <>);
-
-      -- Out End Points --
-      for Ep in EP_Index loop
-
-         if DEVICE_Periph.OEP (Ep).CTL.EPENA then
-            DEVICE_Periph.OEP (Ep).CTL := (EPDIS  => True,
-                                           SNAK   => True,
-                                           others => <>);
-         else
-            DEVICE_Periph.OEP (Ep).CTL := (others => <>);
-         end if;
-         DEVICE_Periph.OEP (Ep).SIZ := (others => <>);
-         DEVICE_Periph.OEP (Ep).INT :=
-           (XFRC   => True,
-            EPDISD => True,
-            STUP    => True,
-            OTEPDIS => True,
-            B2BSTUP => True,
-            others => <>);
-      end loop;
+      Clear_Device_Interrupts;
 
       --  FIXME? Should we clear FIFO underrun? But it doesn't exist in the SVD
       --  DEVICE_Periph.DIEPMSK.
+
+      EP_Config(Direction => EP_In);
+      EP_Config(Direction => EP_Out);
 
       --  Disable all interrupts
       GLOBAL_Periph.GINTMSK := (others => <>);
@@ -420,15 +334,7 @@ package body DWC_OTG_FS is
       --  if DMA disabled
       GLOBAL_Periph.GINTMSK.RXFLVLM := True;
 
-      --  Common interrupt
-      GLOBAL_Periph.GINTMSK.USBSUSPM := True;
-      GLOBAL_Periph.GINTMSK.USBRST := True;
-      GLOBAL_Periph.GINTMSK.ENUMDNEM := True;
-      GLOBAL_Periph.GINTMSK.IEPINT := True;
-      GLOBAL_Periph.GINTMSK.OEPINT := True;
-      GLOBAL_Periph.GINTMSK.IISOIXFRM := True;
-      GLOBAL_Periph.GINTMSK.PXFRM_IISOOXFRM := True;
-      GLOBAL_Periph.GINTMSK.WUIM := True;
+      Enable_Device_Interrupts;
 
       --  VBUS sensing interrupt
       GLOBAL_Periph.GINTMSK.SRQIM := True;
@@ -443,6 +349,23 @@ package body DWC_OTG_FS is
       Put_Line ("Init finished");
 
    end Initialize;
+
+   ------------------------------
+   -- Enable_Device_Interrupts --
+   ------------------------------
+
+   procedure Enable_Device_Interrupts is
+   begin
+      --  Common interrupt
+      GLOBAL_Periph.GINTMSK.USBSUSPM := True;
+      GLOBAL_Periph.GINTMSK.USBRST := True;
+      GLOBAL_Periph.GINTMSK.ENUMDNEM := True;
+      GLOBAL_Periph.GINTMSK.IEPINT := True;
+      GLOBAL_Periph.GINTMSK.OEPINT := True;
+      GLOBAL_Periph.GINTMSK.IISOIXFRM := True;
+      GLOBAL_Periph.GINTMSK.PXFRM_IISOOXFRM := True;
+      GLOBAL_Periph.GINTMSK.WUIM := True;
+   end Enable_Device_Interrupts;
 
    ---------------------
    -- Set_EP_Callback --
@@ -470,6 +393,31 @@ package body DWC_OTG_FS is
    begin
       This.Setup_Callbacks (EP) := Callback;
    end Set_Setup_Callback;
+
+   -----------------------------
+   -- Clear_Device_Interrupts --
+   -----------------------------
+
+   procedure Clear_Device_Interrupts is
+   begin
+      --  Clear all device interrupts
+      DEVICE_Periph.DIEPMSK :=
+        (XFRCM     => False,
+         EPDM      => False,
+         TOM       => False,
+         ITTXFEMSK => False,
+         INEPNMM   => False,
+         INEPNEM   => False,
+         others    => <>);
+      DEVICE_Periph.DOEPMSK :=
+        (XFRCM  => False,
+         EPDM   => False,
+         STUPM  => False,
+         OTEPDM => False,
+         others    => <>);
+      DEVICE_Periph.DAINT := (16#FFFF#, 16#FFFF#);
+      DEVICE_Periph.DAINTMSK := (0, 0);
+   end Clear_Device_Interrupts;
 
    --------------
    -- EP_Setup --
@@ -707,6 +655,89 @@ package body DWC_OTG_FS is
       DEVICE_Periph.DCFG.DAD := 0;
       DEVICE_Periph.DCFG.DAD := Addr;
    end Set_Address;
+
+   ---------------
+   -- EP_Config --
+   ---------------
+
+   procedure EP_Config (Direction : EP_Dir) is
+   begin
+      if Direction = EP_In then
+         if DEVICE_Periph.DIEPCTL0.EPENA then
+            DEVICE_Periph.DIEPCTL0 := (EPDIS  => True,
+                                       SNAK   => True,
+                                       others => <>);
+         else
+            DEVICE_Periph.DIEPCTL0 := (others => <>);
+         end if;
+         DEVICE_Periph.DIEPTSIZ0 := (others => <>);
+         DEVICE_Periph.DIEPINT0 :=
+           (XFRC   => True,
+            EPDISD => True,
+            TOC    => True,
+            ITTXFE => True,
+            INEPNE => True,
+            TXFE   => True,
+            others => <>);
+
+         -- In End Points --
+         for Ep in EP_Index loop
+            if DEVICE_Periph.IEP (Ep).CTL.EPENA then
+               DEVICE_Periph.IEP (Ep).CTL := (EPDIS  => True,
+                                              SNAK   => True,
+                                              others => <>);
+            else
+               DEVICE_Periph.IEP (Ep).CTL := (others => <>);
+            end if;
+            DEVICE_Periph.IEP (Ep).SIZ := (others => <>);
+            DEVICE_Periph.IEP (Ep).INT :=
+              (XFRC   => True,
+               EPDISD => True,
+               TOC    => True,
+               ITTXFE => True,
+               INEPNE => True,
+               TXFE   => True,
+               others => <>);
+         end loop;
+      else
+         if DEVICE_Periph.DOEPCTL0.EPENA then
+            DEVICE_Periph.DOEPCTL0 := (EPDIS  => True,
+                                       SNAK   => True,
+                                       others => <>);
+         else
+            DEVICE_Periph.DOEPCTL0 := (others => <>);
+         end if;
+
+         DEVICE_Periph.DOEPTSIZ0 := (others => <>);
+         DEVICE_Periph.DOEPINT0 :=
+           (XFRC   => True,
+            EPDISD => True,
+            STUP    => True,
+            OTEPDIS => True,
+            B2BSTUP => True,
+            others => <>);
+
+         -- Out End Points --
+         for Ep in EP_Index loop
+
+            if DEVICE_Periph.OEP (Ep).CTL.EPENA then
+               DEVICE_Periph.OEP (Ep).CTL := (EPDIS  => True,
+                                              SNAK   => True,
+                                              others => <>);
+            else
+               DEVICE_Periph.OEP (Ep).CTL := (others => <>);
+            end if;
+            DEVICE_Periph.OEP (Ep).SIZ := (others => <>);
+            DEVICE_Periph.OEP (Ep).INT :=
+              (XFRC   => True,
+               EPDISD => True,
+               STUP    => True,
+               OTEPDIS => True,
+               B2BSTUP => True,
+               others => <>);
+         end loop;
+      end if;
+   end EP_Config;
 
    --------------------
    -- EP_Read_Packet --

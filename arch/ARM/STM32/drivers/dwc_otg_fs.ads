@@ -107,6 +107,12 @@ private
    package Registers is new DWC_USB_OTG_Registers (Base_Address);
    use Registers;
 
+   procedure EP_Config (Direction : EP_Dir);
+
+   procedure Enable_Device_Interrupts;
+
+   procedure Clear_Device_Interrupts;
+
    type FIFO_Address_Array is array (All_EP_Index) of System.Address;
 
    type OTG_USB_Device is new USB_Device_Controller with record
