@@ -28,7 +28,81 @@
 --   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.   --
 --                                                                          --
 ------------------------------------------------------------------------------
+with HAL; use HAL;
+
+private with HAL.USB.Device;
+private with System;
+with USB; use USB;
+with USB.Device.Classes; use USB.Device.Classes;
 
 package USB.Device is
+
+   type USB_Device is tagged private;
+
+   type Device_Descriptor is record
+      bLength            : UInt8;
+      bDescriptorType    : UInt8;
+      bcdUSB             : UInt16;
+      bDeviceClass       : UInt8;
+      bDeviceSubClass    : UInt8;
+      bDeviceProtocol    : UInt8;
+      bMaxPacketSize0    : UInt8;
+      idVendor           : UInt16;
+      idProduct          : UInt16;
+      bcdDevice          : UInt16;
+      iManufacturer      : UInt8;
+      iProduct           : UInt8;
+      iSerialNumber      : UInt8;
+      bNumConfigurations : UInt8;
+   end record with Pack;
+
+   function Initialized (This : USB_Device) return Boolean;
+
+   procedure Initalize (This       : in out USB_Device;
+                        Controller : not null Any_USB_Device_Controller;
+                        Class      : not null Any_USB_Device_Class;
+                        Dec        : not null access constant Device_Descriptor;
+                        Config     : not null access constant UInt8_Array;
+                        Strings    : not null access constant String_Array)
+     with Post => This.Initialized;
+
+
+   procedure Start (This : in out USB_Device)
+     with Pre => This.Initialized;
+
+   procedure Reset (This : in out USB_Device)
+     with Pre => This.Initialized;
+
+   procedure Poll (This : in out USB_Device)
+     with Pre => This.Initialized;
+
+   function Controller (This : USB_Device) return not null Any_USB_Device_Controller
+     with Pre => This.Initialized;
+
+private
+   type USB_Device is tagged record
+
+      --  For better performances this buffer has to be word aligned. So we put
+      --  it as the first field of this record.
+      RX_Ctrl_Buf : UInt8_Array (1 .. 256);
+
+      UDC     : Any_USB_Device_Controller := null;
+      Class   : Any_USB_Device_Class := null;
+      Desc    : access constant Device_Descriptor := null;
+      Config  : access constant UInt8_Array := null;
+      Strings : access constant String_Array := null;
+
+      Dev_Addr  : UInt7 := 0;
+      Dev_State : Device_State := Idle;
+
+      Ctrl_Req : HAL.USB.Setup_Data;
+      Ctrl_Buf : System.Address;
+      Ctrl_Len : Buffer_Len := 0;
+      Ctrl_State : Control_State := Idle;
+      Ctrl_Need_ZLP : Boolean := False;
+
+   end record;
+
+   type Device_State is (Idle, Addressed, Configured, Suspended);
 
 end USB.Device;
