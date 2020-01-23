@@ -473,12 +473,12 @@ package body USB.Device is
                This.UDC.EP_Write_Packet (0, System.Null_Address, 0);
                This.Ctrl_State := Status_In;
             else
-               raise Program_Error with "should stall";
+               This.UDC.EP_Set_Stall (EP => EP_Addr'(0, EP_Out));
             end if;
 
          when others =>
             --  FIXME: Stall transaction
-            raise Program_Error with "should stall";
+            This.UDC.EP_Set_Stall (EP => EP_Addr'(0, EP_Out));
       end case;
    end Control_Out;
 
