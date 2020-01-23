@@ -5,6 +5,7 @@ with USB_Testing.UDC_Scenarios;
 with HAL; use HAL;
 
 with USB;
+with USB.Device;
 
 procedure TC_Set_Address is
 

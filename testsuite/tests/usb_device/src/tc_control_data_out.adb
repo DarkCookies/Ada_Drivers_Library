@@ -7,8 +7,6 @@ with HAL;            use HAL;
 with HAL.USB;        use HAL.USB;
 with HAL.USB.Device; use HAL.USB.Device;
 
-with USB;
-
 procedure TC_Control_Data_Out is
 
    Scenario : aliased constant UDC_Stub.Stub_Scenario :=

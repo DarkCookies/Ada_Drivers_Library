@@ -1,5 +1,8 @@
-package USB.Device.Classes is
-   
+with HAL.USB; use HAL.USB;
+with HAL.USB.Device; use HAL.USB.Device;
+
+package USB.Classes is
+
    -- Device Class Interface --
    type USB_Device_Class is interface;
    type Any_USB_Device_Class is access all USB_Device_Class'Class;
@@ -34,4 +37,4 @@ package USB.Device.Classes is
                          BCNT : UInt32)
    is abstract;
 
-end USB.Device.Classes;
+end USB.Classes;

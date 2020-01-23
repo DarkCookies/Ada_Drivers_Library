@@ -1,10 +1,11 @@
 with USB_Testing;               use USB_Testing;
-with USB_Testing.UDC_Stub;      use USB_Testing.UDC_Stub;
+with USB_Testing.UDC_Stub;
 with USB_Testing.UDC_Scenarios;
 
 with HAL; use HAL;
 
 with USB;
+with USB.Device;
 
 procedure TC_Device_Descriptor is
 

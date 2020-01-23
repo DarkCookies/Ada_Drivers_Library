@@ -28,17 +28,15 @@
 --   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.   --
 --                                                                          --
 ------------------------------------------------------------------------------
-with HAL; use HAL;
+with HAL;
+with USB.Classes;
+with HAL.USB.Device; use HAL.USB.Device;
 
-private with HAL.USB.Device;
 private with System;
+with HAL.USB; use HAL.USB;
 with USB; use USB;
-with USB.Device.Classes; use USB.Device.Classes;
 
 package USB.Device is
-
-   type USB_Device is tagged private;
-
    type Device_Descriptor is record
       bLength            : UInt8;
       bDescriptorType    : UInt8;
@@ -56,11 +54,48 @@ package USB.Device is
       bNumConfigurations : UInt8;
    end record with Pack;
 
+   type Device_State is (Idle, Addressed, Configured, Suspended);
+
+   type Control_State is (Idle, Stalled,
+
+                          --  In means Device to Host
+                          Data_In,
+                          Last_Data_In,
+                          Status_In,
+
+                          --  Out means Host to Device
+                          Data_Out,
+                          Last_Data_Out,
+                          Status_Out);
+
+   type USB_Device is tagged limited record
+
+      --  For better performances this buffer has to be word aligned. So we put
+      --  it as the first field of this record.
+      RX_Ctrl_Buf : UInt8_Array (1 .. 256);
+
+      UDC     : HAL.USB.Device.Any_USB_Device_Controller := null;
+      Class   : USB.Classes.Any_USB_Device_Class := null;
+      Desc    : access constant Device_Descriptor := null;
+      Config  : access constant UInt8_Array := null;
+      Strings : access constant String_Array := null;
+
+      Dev_Addr  : UInt7 := 0;
+      Dev_State : Device_State := Idle;
+
+      Ctrl_Req : Setup_Data;
+      Ctrl_Buf : System.Address;
+      Ctrl_Len : Buffer_Len := 0;
+      Ctrl_State : Control_State := Idle;
+      Ctrl_Need_ZLP : Boolean := False;
+   end record;
+
    function Initialized (This : USB_Device) return Boolean;
 
+
    procedure Initalize (This       : in out USB_Device;
-                        Controller : not null Any_USB_Device_Controller;
-                        Class      : not null Any_USB_Device_Class;
+                        Controller : not null HAL.USB.Device.Any_USB_Device_Controller;
+                        Class      : not null USB.Classes.Any_USB_Device_Class;
                         Dec        : not null access constant Device_Descriptor;
                         Config     : not null access constant UInt8_Array;
                         Strings    : not null access constant String_Array)
@@ -76,33 +111,54 @@ package USB.Device is
    procedure Poll (This : in out USB_Device)
      with Pre => This.Initialized;
 
-   function Controller (This : USB_Device) return not null Any_USB_Device_Controller
+   function Controller (This : USB_Device) return
+     not null HAL.USB.Device.Any_USB_Device_Controller
      with Pre => This.Initialized;
 
-private
-   type USB_Device is tagged record
+   procedure Control_Setup_Read (This : in out USB_Device;
+                                 Req  : Setup_Data);
+   --  Handle setup read request
 
-      --  For better performances this buffer has to be word aligned. So we put
-      --  it as the first field of this record.
-      RX_Ctrl_Buf : UInt8_Array (1 .. 256);
+   procedure Control_Setup_Write (This : in out USB_Device;
+                                  Req  : Setup_Data);
+   --  Handle setup read request
 
-      UDC     : Any_USB_Device_Controller := null;
-      Class   : Any_USB_Device_Class := null;
-      Desc    : access constant Device_Descriptor := null;
-      Config  : access constant UInt8_Array := null;
-      Strings : access constant String_Array := null;
+   procedure Control_Setup (This : in out USB_Device;
+                            EP   : EP_Id;
+                            Req  : Setup_Data);
+   --  Handle setup request
 
-      Dev_Addr  : UInt7 := 0;
-      Dev_State : Device_State := Idle;
+   function Control_Dispatch_Request (This : in out USB_Device;
+                                      Req  : Setup_Data)
+                                      return Setup_Request_Answer;
+   --  Handle setup read request
 
-      Ctrl_Req : HAL.USB.Setup_Data;
-      Ctrl_Buf : System.Address;
-      Ctrl_Len : Buffer_Len := 0;
-      Ctrl_State : Control_State := Idle;
-      Ctrl_Need_ZLP : Boolean := False;
+   function Control_Dispatch_Write_Request (This : in out USB_Device)
+                                            return Setup_Request_Answer;
 
-   end record;
 
-   type Device_State is (Idle, Addressed, Configured, Suspended);
+   function Control_Device_Request  (This : in out USB_Device;
+                                      Req  : Setup_Data)
+                                      return Setup_Request_Answer;
+   function Get_String (This  : in out USB_Device;
+                        Index : UInt8)
+                        return Setup_Request_Answer;
+   function Get_Descriptor (This : in out USB_Device;
+                            Req  : Setup_Data)
+                            return Setup_Request_Answer;
+
+   function Set_Address (This : in out USB_Device;
+                            Req  : Setup_Data)
+                            return Setup_Request_Answer;
+   function Set_Configuration (This : in out USB_Device;
+                               Req  : Setup_Data)
+                               return Setup_Request_Answer;
+
+   procedure Control_Send_Chunk (This : in out USB_Device);
+   procedure Control_Receive_Chunk (This : in out USB_Device);
+
+   procedure Control_In (This : in out USB_Device);
+   procedure Control_Out (This : in out USB_Device;
+                          BCNT : UInt11);
 
 end USB.Device;

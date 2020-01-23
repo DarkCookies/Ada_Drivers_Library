@@ -33,7 +33,6 @@ with HAL;            use HAL;
 with System.Storage_Elements;
 
 private with System;
-private with HAL.USB;
 
 package USB is
 
@@ -61,19 +60,8 @@ package USB is
 
    subtype Buffer_Len is System.Storage_Elements.Storage_Offset;
 
-
-private
-
-   type Control_State is (Idle, Stalled,
-
-                          --  In means Device to Host
-                          Data_In,
-                          Last_Data_In,
-                          Status_In,
-
-                          --  Out means Host to Device
-                          Data_Out,
-                          Last_Data_Out,
-                          Status_Out);
-
+   function Need_ZLP (Len     : Buffer_Len;
+                      wLength : UInt16;
+                      EP_Size : UInt8)
+                      return Boolean;
 end USB;

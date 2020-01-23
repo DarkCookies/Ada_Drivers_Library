@@ -37,12 +37,13 @@ with HAL;            use HAL;
 with HAL.USB;        use HAL.USB;
 with HAL.USB.Device; use HAL.USB.Device;
 with USB;
+with USB.Device;
 
 package USB_Testing.UDC_Stub is
 
-   Desc : aliased constant USB.Device_Descriptor :=
+   Desc : aliased constant USB.Device.Device_Descriptor :=
      (
-      bLength            => USB.Device_Descriptor'Size / 8,
+      bLength            => USB.Device.Device_Descriptor'Size / 8,
       bDescriptorType    => 1, -- DT_DEVICE
       bcdUSB             => 16#0200#,
       bDeviceClass       => 0,

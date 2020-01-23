@@ -36,12 +36,13 @@ with System;
 with HAL;            use HAL;
 with HAL.USB;        use HAL.USB;
 with HAL.USB.Device; use HAL.USB.Device;
-with USB;
+with USB.Device;
+with USB.Classes;
 
 package USB_Testing.Class_Stub is
 
    type Device_Class_Stub
-   is new USB.USB_Device_Class
+   is new USB.Classes.USB_Device_Class
    with private;
 
    overriding
@@ -77,7 +78,7 @@ package USB_Testing.Class_Stub is
 private
 
    type Device_Class_Stub
-   is new USB.USB_Device_Class
+   is new USB.Classes.USB_Device_Class
    with null record;
 
 end USB_Testing.Class_Stub;

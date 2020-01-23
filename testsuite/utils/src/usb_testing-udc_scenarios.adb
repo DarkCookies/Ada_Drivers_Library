@@ -30,6 +30,7 @@
 ------------------------------------------------------------------------------
 
 with USB;
+with USB.Device;
 
 with USB_Testing.Class_Stub;
 
@@ -49,7 +50,7 @@ package body USB_Testing.UDC_Scenarios is
       UDC : aliased UDC_Stub.Controller (Scenario'Unchecked_Access,
                                          RX_Data'Unchecked_Access,
                                          Has_Early_Address => True);
-      Ctrl : USB.USB_Device;
+      Ctrl : USB.Device.USB_Device;
    begin
 
       Ctrl.Initalize (Controller => UDC'Unchecked_Access,

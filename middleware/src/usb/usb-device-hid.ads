@@ -30,12 +30,12 @@
 ------------------------------------------------------------------------------
 
 with HAL.USB;
-with USB.Device.Classes;
+with USB.Classes;
 with Interfaces;
 
 package USB.Device.HID is
 
-   type Default_HID_Class is new USB.Device.Classes.USB_Device_Class with private;
+   type Default_HID_Class is new USB.Classes.USB_Device_Class with private;
 
    overriding
    function Configure (This  : in out Default_HID_Class;
@@ -79,7 +79,7 @@ private
 
    type Class_State is (Stop, Idle, Busy);
 
-   type Default_HID_Class is new USB.Device.Classes.USB_Device_Class with record
+   type Default_HID_Class is new USB.Classes.USB_Device_Class with record
       Report     : UInt8_Array (1 .. 3) := (others => 0);
       State      : Class_State := Stop;
       Idle_State : UInt8 := 0;

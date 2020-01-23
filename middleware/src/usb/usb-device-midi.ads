@@ -30,6 +30,7 @@
 ------------------------------------------------------------------------------
 
 with HAL.USB;
+with USB.Classes; use USB.Classes;
 
 package USB.Device.MIDI is
 
