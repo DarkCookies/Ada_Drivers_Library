@@ -29,12 +29,10 @@
 --                                                                          --
 ------------------------------------------------------------------------------
 
-with Ada.Real_Time;            use Ada.Real_Time;
 with Ada.Text_IO;
 with System.Storage_Elements;  use System.Storage_Elements;
 with Ada.Unchecked_Conversion;
 with Hex_Dump;
-with STM32.USB; use STM32.USB;
 
 package body DWC_OTG_FS is
 
@@ -57,8 +55,107 @@ package body DWC_OTG_FS is
       end if;
    end Put_Line;
 
-   procedure Device_Init;
+   procedure Device_Init (This : in out OTG_USB_Device);
    procedure EP0_Out_Start (This : in out OTG_USB_Device);
+   procedure Set_TX_Fifo (This : in out OTG_USB_Device;
+                          Ep   :        EP_Id;
+                          Size :        UInt16);
+
+   -----------------
+   -- Device_Init --
+   -----------------
+
+   procedure Device_Init (This : in out OTG_USB_Device) is
+   begin
+      --  VBus sensing depends on the version of the OTG controller
+      if OTG_HS_GLOBAL_Periph.OTG_HS_CID < 16#2000# then
+
+         OTG_HS_GLOBAL_Periph.OTG_HS_GCCFG.VBUSBSEN := True;
+
+         --  FIXME: User should be able to disable VBUS sensing (f40x era)
+      else
+
+         --  This version of the device has a different layout for the GCCFG
+         --  register. It happens that NOVBUSSENS on the old device is the
+         --  same as VBDEN on the newer device.
+
+         --  FIXME: Have a correct layout for this version
+         OTG_HS_GLOBAL_Periph.OTG_HS_GCCFG.NOVBUSSENS := True;
+
+         --  FIXME: User should be able to disable VBUS sensing (f446 era)
+      end if;
+
+      --  Restart the Phy Clock
+      OTG_HS_PWRCLK_Periph.OTG_HS_PCGCR := (STPPCLK  => False,
+                                            GATEHCLK => False,
+                                            PHYSUSP  => False,
+                                            others   => <>);
+
+      --  Device mode configuration
+      OTG_HS_DEVICE_Periph.OTG_HS_DCFG.PFIVL := 0; -- 80% frame interval
+
+      OTG_HS_DEVICE_Periph.OTG_HS_DCFG.DSPD := 3; -- Set full speed
+
+      Flush_RX_FIFO;
+      Flush_TX_FIFO;
+
+      Clear_Device_Interrupts;
+
+      --  FIXME? Should we clear FIFO underrun? But it doesn't exist in the SVD
+      --  OTG_HS_DEVICE_Periph.OTG_HS_DIEPMSK.
+
+      EP_Config (Direction => EP_In);
+      EP_Config (Direction => EP_Out);
+
+      --  Disable all interrupts
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK := (others => <>);
+      --  Clear all interrupts
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS :=
+        (
+         CMOD              => True,
+         MMIS              => True,
+         OTGINT            => True,
+         SOF               => True,
+         RXFLVL            => True,
+         NPTXFE            => True,
+         GINAKEFF          => True,
+         BOUTNAKEFF        => True,
+         ESUSP             => True,
+         USBSUSP           => True,
+         USBRST            => True,
+         ENUMDNE           => True,
+         ISOODRP           => True,
+         EOPF              => True,
+         IEPINT            => True,
+         OEPINT            => True,
+         IISOIXFR          => True,
+         PXFR_INCOMPISOOUT => True,
+         HPRTINT           => True,
+         HCINT             => True,
+         PTXFE             => True,
+         CIDSCHG           => True,
+         DISCINT           => True,
+         SRQINT            => True,
+         WKUINT            => True,
+         others => <>);
+
+      --  if DMA disabled
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK.RXFLVLM := True;
+
+      Enable_Device_Interrupts;
+
+      --  VBUS sensing interrupt
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK.SRQIM := True;
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK.OTGINT := True;
+
+      USB_Connect (Connect => False);
+
+      Set_RX_Fifo (16#80#);
+      Set_TX_Fifo (This, 0, 16#40#);
+      Set_TX_Fifo (This, 1, 16#80#);
+
+      Put_Line ("Init finished");
+   end Device_Init;
 
    -------------------
    -- EP0_Out_Start --
@@ -66,17 +163,55 @@ package body DWC_OTG_FS is
 
    procedure EP0_Out_Start (This : in out OTG_USB_Device) is
    begin
-      DEVICE_Periph.DOEPTSIZ0 := (STUPCNT => 3,
-                                  PKTCNT  => True,
-                                  XFRSIZ  => 3 * 8,
-                                  others  => <>);
+      OTG_HS_DEVICE_Periph.OTG_HS_DOEPTSIZ0 := (STUPCNT => 3,
+                                                PKTCNT  => True,
+                                                XFRSIZ  => 3 * 8,
+                                                others  => <>);
       if This.Force_NAK (0) then
-         DEVICE_Periph.DOEPCTL0.SNAK := True;
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL0.SNAK := True;
       else
-         DEVICE_Periph.DOEPCTL0.CNAK := True;
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL0.CNAK := True;
       end if;
-      DEVICE_Periph.DOEPCTL0.EPENA := True;
+      OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL0.EPENA := True;
    end EP0_Out_Start;
+
+
+   -----------------
+   -- Set_TX_Fifo --
+   -----------------
+
+   procedure Set_TX_Fifo (This : in out OTG_USB_Device;
+                          Ep   : EP_Id;
+                          Size : UInt16) is
+      pragma Unreferenced (This);
+      TX_Offset : UInt16 := OTG_HS_GLOBAL_Periph.OTG_HS_GRXFSIZ.RXFD;
+   begin
+
+      if not Valid (Ep) then
+         raise Program_Error with "invalid EP in Set_TX_Fifo";
+      end if;
+
+      if Ep = 0 then
+         OTG_HS_GLOBAL_Periph.OTG_HS_HPTXFSIZ.PTXFD := Size;
+         OTG_HS_GLOBAL_Periph.OTG_HS_HPTXFSIZ.PTXSA := TX_Offset;
+      else
+         TX_Offset := TX_Offset + OTG_HS_GLOBAL_Periph.OTG_HS_HPTXFSIZ.PTXFD;
+
+         for Index in TX_Fifo_Index loop
+            if TX_Fifo_Index (All_EP_Index (Ep)) >= Index then
+               TX_Offset := TX_Offset + Global_DIEPTXF (Index).INEPTXFD;
+            else
+               exit;
+            end if;
+         end loop;
+         Global_DIEPTXF (TX_Fifo_Index (Ep)).INEPTXSA := TX_Offset;
+         Global_DIEPTXF (TX_Fifo_Index (Ep)).INEPTXFD := Size;
+      end if;
+   end Set_TX_Fifo;
+
+   -------------------
+   -- Flush_RX_FIFO --
+   -------------------
 
    -----------
    -- Start --
@@ -87,7 +222,7 @@ package body DWC_OTG_FS is
       pragma Unreferenced (This);
    begin
       USB_Connect;
-      Enable_Interrupt;
+      Set_Global_Interrupt;
    end Start;
 
    ----------------
@@ -103,98 +238,8 @@ package body DWC_OTG_FS is
       Set_Mode (Is_Device => True);
 
       --  USB_DevInit...
-      Device_Init;
+      Device_Init (This => This);
       --  Enable VBUS sensing
-
-      --  VBus sensing depends on the version of the OTG controller
-      if GLOBAL_Periph.CID < 16#2000# then
-
-         GLOBAL_Periph.GCCFG.VBUSBSEN := True;
-
-         --  FIXME: User should be able to disable VBUS sensing (f40x era)
-      else
-
-         --  This version of the device has a different layout for the GCCFG
-         --  register. It happens that NOVBUSSENS on the old device is the
-         --  same as VBDEN on the newer device.
-
-         --  FIXME: Have a correct layout for this version
-         GLOBAL_Periph.GCCFG.NOVBUSSENS := True;
-
-         --  FIXME: User should be able to disable VBUS sensing (f446 era)
-      end if;
-
-      --  Restart the Phy Clock
-      PWRCLK_Periph.PCGCR := (STPPCLK  => False,
-                              GATEHCLK => False,
-                              PHYSUSP  => False,
-                              others   => <>);
-
-      --  Device mode configuration
-      DEVICE_Periph.DCFG.PFIVL := 0; -- 80% frame interval
-
-      DEVICE_Periph.DCFG.DSPD := 3; -- Set full speed
-
-      Flush_RX_FIFO;
-      Flush_TX_FIFO;
-
-      Clear_Device_Interrupts;
-
-      --  FIXME? Should we clear FIFO underrun? But it doesn't exist in the SVD
-      --  DEVICE_Periph.DIEPMSK.
-
-      EP_Config(Direction => EP_In);
-      EP_Config(Direction => EP_Out);
-
-      --  Disable all interrupts
-      GLOBAL_Periph.GINTMSK := (others => <>);
-      --  Clear all interrupts
-      GLOBAL_Periph.GINTSTS :=
-        (
-         CMOD               => True,
-         MMIS               => True,
-         OTGINT             => True,
-         SOF                => True,
-         RXFLVL             => True,
-         NPTXFE             => True,
-         GINAKEFF           => True,
-         GOUTNAKEFF         => True,
-         ESUSP              => True,
-         USBSUSP            => True,
-         USBRST             => True,
-         ENUMDNE            => True,
-         ISOODRP            => True,
-         EOPF               => True,
-         IEPINT             => True,
-         OEPINT             => True,
-         IISOIXFR           => True,
-         PXFR_INCOMPISOOUT  => True,
-         HPRTINT            => True,
-         HCINT              => True,
-         PTXFE              => True,
-         CIDSCHG            => True,
-         DISCINT            => True,
-         SRQINT             => True,
-         WKUPINT            => True,
-         others => <>);
-
-      --  if DMA disabled
-      GLOBAL_Periph.GINTMSK.RXFLVLM := True;
-
-      Enable_Device_Interrupts;
-
-      --  VBUS sensing interrupt
-      GLOBAL_Periph.GINTMSK.SRQIM := True;
-      GLOBAL_Periph.GINTMSK.OTGINT := True;
-
-      USB_Disconnect;
-
-      Set_RX_Fifo (16#80#);
-      Set_TX_Fifo (This, 0, 16#40#);
-      Set_TX_Fifo (This, 1, 16#80#);
-
-      Put_Line ("Init finished");
-
    end Initialize;
 
    ------------------------------
@@ -204,14 +249,14 @@ package body DWC_OTG_FS is
    procedure Enable_Device_Interrupts is
    begin
       --  Common interrupt
-      GLOBAL_Periph.GINTMSK.USBSUSPM := True;
-      GLOBAL_Periph.GINTMSK.USBRST := True;
-      GLOBAL_Periph.GINTMSK.ENUMDNEM := True;
-      GLOBAL_Periph.GINTMSK.IEPINT := True;
-      GLOBAL_Periph.GINTMSK.OEPINT := True;
-      GLOBAL_Periph.GINTMSK.IISOIXFRM := True;
-      GLOBAL_Periph.GINTMSK.PXFRM_IISOOXFRM := True;
-      GLOBAL_Periph.GINTMSK.WUIM := True;
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK.USBSUSPM := True;
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK.USBRST := True;
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK.ENUMDNEM := True;
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK.IEPINT := True;
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK.OEPINT := True;
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK.IISOIXFRM := True;
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK.PXFRM_IISOOXFRM := True;
+      OTG_HS_GLOBAL_Periph.OTG_HS_GINTMSK.WUIM := True;
    end Enable_Device_Interrupts;
 
    ---------------------
@@ -248,7 +293,7 @@ package body DWC_OTG_FS is
    procedure Clear_Device_Interrupts is
    begin
       --  Clear all device interrupts
-      DEVICE_Periph.DIEPMSK :=
+      OTG_HS_DEVICE_Periph.OTG_HS_DIEPMSK :=
         (XFRCM     => False,
          EPDM      => False,
          TOM       => False,
@@ -256,14 +301,14 @@ package body DWC_OTG_FS is
          INEPNMM   => False,
          INEPNEM   => False,
          others    => <>);
-      DEVICE_Periph.DOEPMSK :=
+      OTG_HS_DEVICE_Periph.OTG_HS_DOEPMSK :=
         (XFRCM  => False,
          EPDM   => False,
          STUPM  => False,
          OTEPDM => False,
          others    => <>);
-      DEVICE_Periph.DAINT := (16#FFFF#, 16#FFFF#);
-      DEVICE_Periph.DAINTMSK := (0, 0);
+      OTG_HS_DEVICE_Periph.OTG_HS_DAINT := (16#FFFF#, 16#FFFF#);
+      OTG_HS_DEVICE_Periph.OTG_HS_DAINTMSK := (0, 0);
    end Clear_Device_Interrupts;
 
    --------------
@@ -294,10 +339,10 @@ package body DWC_OTG_FS is
             MPSIZ := 3;
          end if;
 
-         DEVICE_Periph.DIEPTSIZ0.XFRSIZ :=
-           DIEPTSIZ0_XFRSIZ_Field (Max_Size);
-         DEVICE_Periph.DIEPTSIZ0.PKTCNT := 0;
-         DEVICE_Periph.DIEPCTL0 :=
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPTSIZ0.XFRSIZ :=
+           OTG_HS_DIEPTSIZ0_XFRSIZ_Field (Max_Size);
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPTSIZ0.PKTCNT := 0;
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL0 :=
            (
             MPSIZ          => UInt11 (MPSIZ),
             USBAEP         => True,
@@ -310,7 +355,7 @@ package body DWC_OTG_FS is
             EPDIS          => False,
             EPENA          => True,
             others => <>);
-         DEVICE_Periph.DIEPINT0 :=
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPINT0 :=
            (XFRC   => True,
             EPDISD => True,
             TOC    => True,
@@ -320,11 +365,11 @@ package body DWC_OTG_FS is
             others => <>);
 
          --  Output
-         DEVICE_Periph.DOEPTSIZ0 := (STUPCNT => 3,
-                                     PKTCNT  => True,
-                                     XFRSIZ  => 3 * 8,
-                                     others  => <>);
-         DEVICE_Periph.DOEPCTL0 :=
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPTSIZ0 := (STUPCNT => 3,
+                                                   PKTCNT  => True,
+                                                   XFRSIZ  => 3 * 8,
+                                                   others  => <>);
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL0 :=
            (
             MPSIZ          => MPSIZ,
             USBAEP         => True,
@@ -339,10 +384,10 @@ package body DWC_OTG_FS is
             others => <>);
 
          --  FIFO
-         GLOBAL_Periph.GNPTXFSIZ_Host.NPTXFD := Max_Size / 4;
-         GLOBAL_Periph.GNPTXFSIZ_Host.NPTXFSA := Rx_FIFO_Size;
+         OTG_HS_GLOBAL_Periph.OTG_HS_GNPTXFSIZ_Host.NPTXFD := Max_Size / 4;
+         OTG_HS_GLOBAL_Periph.OTG_HS_GNPTXFSIZ_Host.NPTXFSA := Rx_FIFO_Size;
 
-         DEVICE_Periph.DOEPINT0 :=
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0 :=
            (XFRC    => True,
             EPDISD  => True,
             STUP    => True,
@@ -350,8 +395,8 @@ package body DWC_OTG_FS is
             B2BSTUP => True,
             others  => <>);
 
-         DEVICE_Periph.DAINTMSK.IEPM := DEVICE_Periph.DAINTMSK.IEPM or 1;
-         DEVICE_Periph.DAINTMSK.OEPM := DEVICE_Periph.DAINTMSK.OEPM or 1;
+         OTG_HS_DEVICE_Periph.OTG_HS_DAINTMSK.IEPM := OTG_HS_DEVICE_Periph.OTG_HS_DAINTMSK.IEPM or 1;
+         OTG_HS_DEVICE_Periph.OTG_HS_DAINTMSK.OEPM := OTG_HS_DEVICE_Periph.OTG_HS_DAINTMSK.OEPM or 1;
 
          return;
       end if;
@@ -364,8 +409,8 @@ package body DWC_OTG_FS is
          when EP_In =>
             Set_TX_Fifo (This, EP.Num, Max_Size);
 
-            DEVICE_Periph.IEP (EP_Index (EP.Num)).SIZ.XFRSIZ := UInt19 (Max_Size);
-            DEVICE_Periph.IEP (EP_Index (EP.Num)).CTL :=
+            Device_IEPSIZ (EP_Index (EP.Num)).XFRSIZ := UInt19 (Max_Size);
+            Device_IEPCTL (EP_Index (EP.Num)) :=
               (
                MPSIZ          => UInt11 (Max_Size),
                USBAEP         => True,
@@ -396,9 +441,9 @@ package body DWC_OTG_FS is
          when EP_Out =>
             This.EP_Callbacks (EP.Num, EP_Out) := Callback;
 
-            DEVICE_Periph.OEP (EP_Index (EP.Num)).SIZ.XFRSIZ := UInt19 (Max_Size);
-            DEVICE_Periph.OEP (EP_Index (EP.Num)).SIZ.PKTCNT := 1;
-            DEVICE_Periph.OEP (EP_Index (EP.Num)).CTL :=
+            Device_OEPSIZ (EP_Index (EP.Num)).XFRSIZ := UInt19 (Max_Size);
+            Device_OEPSIZ (EP_Index (EP.Num)).PKTCNT := 1;
+            Device_OEPCTL (EP_Index (EP.Num)) :=
               (
                MPSIZ          => UInt11 (Max_Size),
                USBAEP         => True,
@@ -442,15 +487,15 @@ package body DWC_OTG_FS is
 
       if NAK then
          case EP.Num is
-            when 0 => DEVICE_Periph.DOEPCTL0.SNAK := True;
+            when 0 => OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL0.SNAK := True;
             when others =>
-               DEVICE_Periph.OEP (EP_Index (EP.Num)).CTL.SNAK := True;
+               Device_OEPCTL (EP_Index (EP.Num)).SNAK := True;
          end case;
       else
          case EP.Num is
-            when 0 => DEVICE_Periph.DOEPCTL0.CNAK := True;
+            when 0 => OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL0.CNAK := True;
             when others =>
-               DEVICE_Periph.OEP (EP_Index (EP.Num)).CTL.CNAK := True;
+               Device_OEPCTL (EP_Index (EP.Num)).CNAK := True;
          end case;
       end if;
 
@@ -473,18 +518,18 @@ package body DWC_OTG_FS is
       case EP.Dir is
          when EP_In =>
             case EP.Num is
-               when 0 => DEVICE_Periph.DIEPCTL0.Stall := True;
+               when 0 => OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL0.Stall := True;
                when others =>
-                  DEVICE_Periph.IEP (EP_Index (EP.Num)).CTL.Stall := True;
+                  Device_IEPCTL (EP_Index (EP.Num)).Stall := True;
             end case;
          when EP_Out =>
             case EP.Num is
                when 0 =>
-                  DEVICE_Periph.DOEPCTL0.Stall := True;
+                  OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL0.Stall := True;
                   --  We still want to be able to receive setup packets
                   EP0_Out_Start (This);
                when others =>
-                  DEVICE_Periph.OEP (EP_Index (EP.Num)).CTL.Stall := True;
+                  Device_OEPCTL (EP_Index (EP.Num)).Stall := True;
             end case;
       end case;
    end EP_Set_Stall;
@@ -499,8 +544,8 @@ package body DWC_OTG_FS is
    is
       pragma Unreferenced (This);
    begin
-      DEVICE_Periph.DCFG.DAD := 0;
-      DEVICE_Periph.DCFG.DAD := Addr;
+      OTG_HS_DEVICE_Periph.OTG_HS_DCFG.DAD := 0;
+      OTG_HS_DEVICE_Periph.OTG_HS_DCFG.DAD := Addr;
    end Set_Address;
 
    ---------------
@@ -510,15 +555,15 @@ package body DWC_OTG_FS is
    procedure EP_Config (Direction : EP_Dir) is
    begin
       if Direction = EP_In then
-         if DEVICE_Periph.DIEPCTL0.EPENA then
-            DEVICE_Periph.DIEPCTL0 := (EPDIS  => True,
-                                       SNAK   => True,
-                                       others => <>);
+         if OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL0.EPENA then
+            OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL0 := (EPDIS  => True,
+                                                     SNAK   => True,
+                                                     others => <>);
          else
-            DEVICE_Periph.DIEPCTL0 := (others => <>);
+            OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL0 := (others => <>);
          end if;
-         DEVICE_Periph.DIEPTSIZ0 := (others => <>);
-         DEVICE_Periph.DIEPINT0 :=
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPTSIZ0 := (others => <>);
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPINT0 :=
            (XFRC   => True,
             EPDISD => True,
             TOC    => True,
@@ -529,15 +574,15 @@ package body DWC_OTG_FS is
 
          -- In End Points --
          for Ep in EP_Index loop
-            if DEVICE_Periph.IEP (Ep).CTL.EPENA then
-               DEVICE_Periph.IEP (Ep).CTL := (EPDIS  => True,
-                                              SNAK   => True,
-                                              others => <>);
+            if Device_IEPCTL (Ep).EPENA then
+               Device_IEPCTL (Ep) := (EPDIS  => True,
+                                      SNAK   => True,
+                                      others => <>);
             else
-               DEVICE_Periph.IEP (Ep).CTL := (others => <>);
+               Device_IEPCTL (Ep) := (others => <>);
             end if;
-            DEVICE_Periph.IEP (Ep).SIZ := (others => <>);
-            DEVICE_Periph.IEP (Ep).INT :=
+            Device_IEPSIZ (Ep) := (others => <>);
+            Device_IEPINT (Ep) :=
               (XFRC   => True,
                EPDISD => True,
                TOC    => True,
@@ -547,16 +592,16 @@ package body DWC_OTG_FS is
                others => <>);
          end loop;
       else
-         if DEVICE_Periph.DOEPCTL0.EPENA then
-            DEVICE_Periph.DOEPCTL0 := (EPDIS  => True,
-                                       SNAK   => True,
-                                       others => <>);
+         if OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL0.EPENA then
+            OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL0 := (EPDIS  => True,
+                                                     SNAK   => True,
+                                                     others => <>);
          else
-            DEVICE_Periph.DOEPCTL0 := (others => <>);
+            OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL0 := (others => <>);
          end if;
 
-         DEVICE_Periph.DOEPTSIZ0 := (others => <>);
-         DEVICE_Periph.DOEPINT0 :=
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPTSIZ0 := (others => <>);
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0 :=
            (XFRC   => True,
             EPDISD => True,
             STUP    => True,
@@ -567,15 +612,15 @@ package body DWC_OTG_FS is
          -- Out End Points --
          for Ep in EP_Index loop
 
-            if DEVICE_Periph.OEP (Ep).CTL.EPENA then
-               DEVICE_Periph.OEP (Ep).CTL := (EPDIS  => True,
-                                              SNAK   => True,
-                                              others => <>);
+            if Device_OEPCTL (Ep).EPENA then
+               Device_OEPCTL (Ep) := (EPDIS  => True,
+                                      SNAK   => True,
+                                      others => <>);
             else
-               DEVICE_Periph.OEP (Ep).CTL := (others => <>);
+               Device_OEPCTL (Ep) := (others => <>);
             end if;
-            DEVICE_Periph.OEP (Ep).SIZ := (others => <>);
-            DEVICE_Periph.OEP (Ep).INT :=
+            Device_OEPSIZ (Ep) := (others => <>);
+            Device_OEPINT (Ep) :=
               (XFRC   => True,
                EPDISD => True,
                STUP    => True,
@@ -660,19 +705,19 @@ package body DWC_OTG_FS is
 
       if Ep = 0 then
 
-         DEVICE_Periph.DIEPTSIZ0.XFRSIZ := UInt7 (Len);
-         DEVICE_Periph.DIEPTSIZ0.PKTCNT := 1;
-         DEVICE_Periph.DIEPCTL0.CNAK := True;
-         DEVICE_Periph.DIEPCTL0.EPENA := True;
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPTSIZ0.XFRSIZ := UInt7 (Len);
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPTSIZ0.PKTCNT := 1;
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL0.CNAK := True;
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL0.EPENA := True;
 
       elsif Valid (Ep) then
 
-         DEVICE_Periph.IEP (EP_Index (Ep)).SIZ.XFRSIZ := UInt19 (Len);
-         DEVICE_Periph.IEP (EP_Index (Ep)).SIZ.PKTCNT := 1;
-         DEVICE_Periph.IEP (EP_Index (Ep)).SIZ.MCNT := 1; -- FIXME: Is that always a good value?
+         Device_IEPSIZ (EP_Index (Ep)).XFRSIZ := UInt19 (Len);
+         Device_IEPSIZ (EP_Index (Ep)).PKTCNT := 1;
+         Device_IEPSIZ (EP_Index (Ep)).MCNT := 1; -- FIXME: Is that always a good value?
 
-         DEVICE_Periph.IEP (EP_Index (Ep)).CTL.CNAK := True;
-         DEVICE_Periph.IEP (EP_Index (Ep)).CTL.EPENA := True;
+         Device_IEPCTL (EP_Index (Ep)).CNAK := True;
+         Device_IEPCTL (EP_Index (Ep)).EPENA := True;
 
       else
          raise Program_Error with "Invalid EP in write packet";
@@ -732,7 +777,7 @@ package body DWC_OTG_FS is
    overriding
    function Poll (This : in out OTG_USB_Device) return UDC_Event is
       GINTSTS : UInt32 with Volatile_Full_Access,
-        Address => GLOBAL_Periph.GINTSTS'Address;
+        Address => OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS'Address;
    begin
 
       --  It is important to check the interrupt flag in this order
@@ -741,13 +786,13 @@ package body DWC_OTG_FS is
 
       Put_Line ("GINTSTS:" & GINTSTS'Img);
 
-      if GLOBAL_Periph.GINTSTS.OEPINT then
+      if OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.OEPINT then
          Put_Line ("GINTSTS.OEPINT");
-         GLOBAL_Periph.GINTSTS.OEPINT := True;
+         OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.OEPINT := True;
 
          declare
             EP : EP_Id := 0;
-            OEPINT : UInt16 :=  DEVICE_Periph.DAINT.OEPINT;
+            OEPINT : UInt16 :=  OTG_HS_DEVICE_Periph.OTG_HS_DAINT.OEPINT;
 
          begin
 
@@ -755,8 +800,8 @@ package body DWC_OTG_FS is
                if (OEPINT and 1) /= 0 then
 
                   if EP = 0 then
-                     if DEVICE_Periph.DOEPINT0.STUP then
-                        DEVICE_Periph.DOEPINT0.STUP := True;
+                     if OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0.STUP then
+                        OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0.STUP := True;
                         Put_Line ("DOEPINT0.STUP");
 
                         --  Prepare EP0 for the next setup
@@ -765,38 +810,38 @@ package body DWC_OTG_FS is
                                 Req    => This.Setup_Req,
                                 Req_EP => EP);
                      end if;
-                     if DEVICE_Periph.DOEPINT0.XFRC then
-                        DEVICE_Periph.DOEPINT0.XFRC := True;
+                     if OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0.XFRC then
+                        OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0.XFRC := True;
                         Put_Line ("DOEPINT0.XFRC");
                      end if;
-                     if DEVICE_Periph.DOEPINT0.EPDISD then
-                        DEVICE_Periph.DOEPINT0.EPDISD := True;
+                     if OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0.EPDISD then
+                        OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0.EPDISD := True;
                         Put_Line ("DOEPINT0.EPDISD");
                      end if;
-                     if DEVICE_Periph.DOEPINT0.OTEPDIS then
-                        DEVICE_Periph.DOEPINT0.OTEPDIS := True;
+                     if OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0.OTEPDIS then
+                        OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0.OTEPDIS := True;
                         Put_Line ("DOEPINT0.OTEPDIS");
                      end if;
-                     if DEVICE_Periph.DOEPINT0.B2BSTUP then
-                        DEVICE_Periph.DOEPINT0.B2BSTUP := True;
+                     if OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0.B2BSTUP then
+                        OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT0.B2BSTUP := True;
                         Put_Line ("DOEPINT0.B2BSTUP");
                      end if;
                   else
-                     if DEVICE_Periph.OEP (EP_Index (EP)).INT.XFRC then
-                        DEVICE_Periph.OEP (EP_Index (EP)).INT.XFRC := True;
+                     if Device_OEPINT (EP_Index (EP)).XFRC then
+                        Device_OEPINT (EP_Index (EP)).XFRC := True;
                         return (Kind  => Transfer_Complete,
                                 T_EP => (EP, EP_Out));
                      end if;
-                     if DEVICE_Periph.OEP (EP_Index (EP)).INT.NYET then
-                        DEVICE_Periph.OEP (EP_Index (EP)).INT.NYET := True;
+                     if Device_OEPINT (EP_Index (EP)).NYET then
+                        Device_OEPINT (EP_Index (EP)).NYET := True;
                         Put_Line ("DOEPINTX.NYET");
                      end if;
-                     if DEVICE_Periph.OEP (EP_Index (EP)).INT.EPDISD then
-                        DEVICE_Periph.OEP (EP_Index (EP)).INT.EPDISD := True;
+                     if Device_OEPINT (EP_Index (EP)).EPDISD then
+                        Device_OEPINT (EP_Index (EP)).EPDISD := True;
                         Put_Line ("DOEPINTX.EPDISD");
                      end if;
-                     if DEVICE_Periph.OEP (EP_Index (EP)).INT.OTEPDIS then
-                        DEVICE_Periph.OEP (EP_Index (EP)).INT.OTEPDIS := True;
+                     if Device_OEPINT (EP_Index (EP)).OTEPDIS then
+                        Device_OEPINT (EP_Index (EP)).OTEPDIS := True;
                         Put_Line ("DOEPINTX.OTEPDIS");
                      end if;
                   end if;
@@ -807,13 +852,13 @@ package body DWC_OTG_FS is
          end;
       end if;
 
-      if GLOBAL_Periph.GINTSTS.IEPINT then
+      if OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.IEPINT then
 
          Put_Line ("GINTSTS.IEPINT");
-         GLOBAL_Periph.GINTSTS.IEPINT := True;
+         OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.IEPINT := True;
          declare
             EP : EP_Id := 0;
-            IEPINT :  UInt16 :=  DEVICE_Periph.DAINT.IEPINT;
+            IEPINT :  UInt16 :=  OTG_HS_DEVICE_Periph.OTG_HS_DAINT.IEPINT;
 
          begin
 
@@ -823,15 +868,15 @@ package body DWC_OTG_FS is
                   case EP is
 
                      when 0 =>
-                        if DEVICE_Periph.DIEPINT0.XFRC then
-                           DEVICE_Periph.DIEPINT0.XFRC := True;
+                        if OTG_HS_DEVICE_Periph.OTG_HS_DIEPINT0.XFRC then
+                           OTG_HS_DEVICE_Periph.OTG_HS_DIEPINT0.XFRC := True;
                            Put_Line ("DIEPINT0");
 
                            return (Kind => Transfer_Complete, T_EP => (0, EP_In));
                         end if;
                      when EP_Id (EP_Index'First) .. EP_Id (EP_Index'Last) =>
-                        if DEVICE_Periph.IEP (EP_Index (EP)).INT.XFRC then
-                           DEVICE_Periph.IEP (EP_Index (EP)).INT.XFRC := True;
+                        if Device_IEPINT (EP_Index (EP)).XFRC then
+                           Device_IEPINT (EP_Index (EP)).XFRC := True;
 
                            if Verbose then
                               Put_Line ("DIEPINT" & EP'Img);
@@ -849,23 +894,23 @@ package body DWC_OTG_FS is
          end;
       end if;
 
-      if GLOBAL_Periph.GINTSTS.USBSUSP then
-         GLOBAL_Periph.GINTSTS.USBSUSP := True;
+      if OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.USBSUSP then
+         OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.USBSUSP := True;
          Put_Line ("GINTSTS.USBSUSP");
       end if;
-      if GLOBAL_Periph.GINTSTS.WKUPINT then
-         GLOBAL_Periph.GINTSTS.WKUPINT := True;
+      if OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.WKUINT then
+         OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.WKUINT := True;
          Put_Line ("GINTSTS.WLUPINT");
       end if;
-      if GLOBAL_Periph.GINTSTS.SOF then
-         GLOBAL_Periph.GINTSTS.SOF := True;
+      if OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.SOF then
+         OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.SOF := True;
          Put_Line ("GINTSTS.SOF");
       end if;
 
-      if GLOBAL_Periph.GINTSTS.RXFLVL then
+      if OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.RXFLVL then
 
          --  This interrupt is not cleared by setting the flag to 1???
-         --  GLOBAL_Periph.GINTSTS.RXFLVL := True;
+         --  OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.RXFLVL := True;
 
          Put_Line ("GINTSTS.RXFLVL");
 
@@ -876,15 +921,15 @@ package body DWC_OTG_FS is
             --  PKTSTS_SETUP_COMP : constant := 4;
             PKTSTS_SETUP      : constant := 6;
 
-            RX_Status : constant GRXSTSP_Peripheral_Register
-              := GLOBAL_Periph.GRXSTSP_Peripheral;
+            RX_Status : constant OTG_HS_GRXSTSP_Peripheral_Register
+              := OTG_HS_GLOBAL_Periph.OTG_HS_GRXSTSP_Peripheral;
             --  It is very important to use the pop version of this register,
             --  otherwise the control data stays in the FIFO and will be mixed
             --  with the real data.
 
          begin
 --              Put_Line ("DIEPTSIZ0.PKTCNT:" &
---                          DEVICE_Periph.DIEPTSIZ0.PKTCNT'Img);
+--                          OTG_HS_DEVICE_Periph.OTG_HS_DIEPTSIZ0.PKTCNT'Img);
 
             if Verbose then
                Put_Line ("PKTSTS:" & RX_Status.PKTSTS'Img);
@@ -911,28 +956,28 @@ package body DWC_OTG_FS is
          end;
       end if;
 
-      if GLOBAL_Periph.GINTSTS.USBRST then
-         GLOBAL_Periph.GINTSTS.USBRST := True;
+      if OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.USBRST then
+         OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.USBRST := True;
          Put_Line ("GINTSTS.USBRST");
 
-         DEVICE_Periph.DCTL.RWUSIG := False;
+         OTG_HS_DEVICE_Periph.OTG_HS_DCTL.RWUSIG := False;
 
          Flush_TX_FIFO;
 
          --  FIXME: Not needed -> Flush_RX_FIFO;
 
-         DEVICE_Periph.DIEPMSK.XFRCM := True;
-         DEVICE_Periph.DIEPMSK.EPDM := True;
-         DEVICE_Periph.DIEPMSK.TOM := True;
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPMSK.XFRCM := True;
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPMSK.EPDM := True;
+         OTG_HS_DEVICE_Periph.OTG_HS_DIEPMSK.TOM := True;
 
-         DEVICE_Periph.DOEPMSK.XFRCM := True;
-         DEVICE_Periph.DOEPMSK.EPDM := True;
-         DEVICE_Periph.DOEPMSK.STUPM := True;
-         DEVICE_Periph.DOEPMSK.OTEPDM := True; -- FIXME: Not needed?
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPMSK.XFRCM := True;
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPMSK.EPDM := True;
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPMSK.STUPM := True;
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPMSK.OTEPDM := True; -- FIXME: Not needed?
 
          This.Set_Address (0);
 
-         DEVICE_Periph.DOEPTSIZ0 :=
+         OTG_HS_DEVICE_Periph.OTG_HS_DOEPTSIZ0 :=
            (XFRSIZ  => 3 * 8,
             PKTCNT  => True,
             STUPCNT => 3,
@@ -940,9 +985,9 @@ package body DWC_OTG_FS is
 
       end if;
 
-      if GLOBAL_Periph.GINTSTS.ENUMDNE then
+      if OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.ENUMDNE then
 
-         GLOBAL_Periph.GINTSTS.ENUMDNE := True;
+         OTG_HS_GLOBAL_Periph.OTG_HS_GINTSTS.ENUMDNE := True;
          --  TODO? fifo_mem_top
          Put_Line ("GINTSTS.ENUMDNE");
 

@@ -33,8 +33,8 @@ with HAL;                  use HAL;
 with System;
 with HAL.USB;              use HAL.USB;
 with HAL.USB.Device;       use HAL.USB.Device;
-
-private with DWC_USB_OTG_Registers;
+with STM32.USB;            use STM32.USB;
+with STM32_SVD.USB_OTG_HS; use STM32_SVD.USB_OTG_HS;
 
 generic
    Base_Address : HAL.UInt32;
@@ -47,6 +47,51 @@ package DWC_OTG_FS is
 
    type OTG_USB_Device is new USB_Device_Controller with private;
 
+   RX_FIFO : aliased UInt32
+     with Size => 32,
+     Volatile_Full_Access,
+     Address => System'To_Address (Base_Address + 16#1000#);
+
+   type OEPCTL_Registers_Array is array (1 .. All_EP_Index'Last - 2) of OTG_HS_DOEPCTL_Register;
+   type OEPSIZ_Registers_Array is array (1 .. All_EP_Index'Last - 1) of OTG_HS_DOEPTSIZ_Register;
+   type OEPINT_Registers_Array is array (EP_Index) of OTG_HS_DOEPINT_Register;
+
+   Device_OEPCTL : OEPCTL_Registers_Array := (OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL1,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL2,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DOEPCTL3);
+
+   Device_OEPINT : OEPINT_Registers_Array := (OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT1,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT2,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT3,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT4,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DOEPINT5);
+
+   Device_OEPSIZ : OEPSIZ_Registers_Array := (OTG_HS_DEVICE_Periph.OTG_HS_DOEPTSIZ1,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DOEPTSIZ2,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DOEPTSIZ3,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DOEPTSIZ4);
+
+   type IEPCTL_Registers_Array is array (EP_Index) of OTG_HS_DIEPCTL_Register;
+   type IEPINT_Registers_Array is array (EP_Index) of OTG_HS_DIEPINT_Register;
+   type IEPSIZ_Registers_Array is array (EP_Index) of OTG_HS_DIEPTSIZ_Register;
+
+   Device_IEPCTL : IEPCTL_Registers_Array := (OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL1,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL2,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL3,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL4,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPCTL5);
+
+   Device_IEPINT : IEPINT_Registers_Array := (OTG_HS_DEVICE_Periph.OTG_HS_DIEPINT1,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPINT2,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPINT3,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPINT4,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPINT5);
+
+   Device_IEPSIZ : IEPSIZ_Registers_Array := (OTG_HS_DEVICE_Periph.OTG_HS_DIEPTSIZ1,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPTSIZ2,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPTSIZ3,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPTSIZ4,
+                                              OTG_HS_DEVICE_Periph.OTG_HS_DIEPTSIZ5);
    overriding
    procedure Set_EP_Callback (This     : in out OTG_USB_Device;
                               EP       : EP_Addr;
@@ -103,9 +148,6 @@ package DWC_OTG_FS is
                               Len  : UInt32);
 
 private
-
-   package Registers is new DWC_USB_OTG_Registers (Base_Address);
-   use Registers;
 
    procedure EP_Config (Direction : EP_Dir);
 

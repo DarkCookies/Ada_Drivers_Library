@@ -39,6 +39,7 @@ with STM32.Device; use STM32.Device;
 with STM32.GPIO; use STM32.GPIO;
 
 with USB;
+with USB.Device;
 with USB.Device.HID;
 with USB.Device.MIDI;
 
@@ -56,13 +57,13 @@ procedure Main_USB is
    use DWC_OTG;
 
    UDC   : aliased OTG_USB_Device;
-   Dev   : USB.USB_Device;
+   Dev   : USB.Device.USB_Device;
    Class_HID : aliased USB.Device.HID.Default_HID_Class;
    Class_MIDI : aliased USB.Device.MIDI.Default_MIDI_Class;
 
-   Desc : aliased constant USB.Device_Descriptor :=
+   Desc : aliased constant USB.Device.Device_Descriptor :=
      (
-      bLength            => USB.Device_Descriptor'Size / 8,
+      bLength            => USB.Device.Device_Descriptor'Size / 8,
       bDescriptorType    => 1, -- DT_DEVICE
       bcdUSB             => 16#0200#,
       bDeviceClass       => 0,
@@ -366,7 +367,7 @@ begin
                   Resistors => Floating,
                   AF_Output_Type => Push_Pull,
                   AF_Speed => Speed_Very_High,
-                  AF => GPIO_AF_OTG_FS_10));
+                  AF => GPIO_AF_OTG1_FS_10));
 
 
    RCC_Periph.AHB2ENR.OTGFSEN := True;

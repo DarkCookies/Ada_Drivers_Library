@@ -477,7 +477,6 @@ package body USB.Device is
             end if;
 
          when others =>
-            --  FIXME: Stall transaction
             This.UDC.EP_Set_Stall (EP => EP_Addr'(0, EP_Out));
       end case;
    end Control_Out;
