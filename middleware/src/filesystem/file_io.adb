@@ -588,7 +588,7 @@ package body File_IO is
    is
       MBR    : Master_Boot_Record;
       Status : Status_Code;
-      FAT_FS : access FAT_Filesystem;
+      FAT_FS : FAT_Filesystem_Access;
    begin
       Status := Read (Device, MBR);
 
@@ -605,7 +605,7 @@ package body File_IO is
             Status := Convert (Open (Controller => Device,
                                      LBA        => LBA (MBR, P),
                                      FS         => FAT_FS.all));
-            return Mount_Volume (Mount_Point, FAT_FS);
+            return Mount_Volume (Mount_Point, HALFS.Any_Filesystem_Driver (FAT_FS));
          end if;
       end loop;
 

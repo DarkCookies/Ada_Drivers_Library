@@ -49,9 +49,11 @@ package USB is
       Str                : USB_String (3 .. bLength);
    end record with Pack;
 
+   type String_Descriptor_Access is access constant String_Descriptor;
+
    type String_Rec is record
       Index  : UInt8;
-      Str    : not null access constant String_Descriptor;
+      Str    : not null String_Descriptor_Access;
    end record;
 
    type String_Array is array (Natural range <>) of String_Rec;
