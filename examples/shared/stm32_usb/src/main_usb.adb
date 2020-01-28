@@ -392,7 +392,7 @@ begin
       Dev.Poll;
 
       if Use_HID then
-         if Class_HID.Ready and then Clock > Next_TX then
+         if Class_HID.Ready  then
 
             Class_HID.Set_Move (10, -10);
 

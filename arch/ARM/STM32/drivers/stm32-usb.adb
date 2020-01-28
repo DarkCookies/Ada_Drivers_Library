@@ -19,10 +19,11 @@ package body STM32.USB is
    end Core_Init;
 
    procedure Core_Reset is
+      Count : Natural := 0;
    begin
       --  Wait for AHB idle
-      while not OTG_HS_GLOBAL_Periph.OTG_HS_GRSTCTL.AHBIDL loop
-         null;
+      while (not OTG_HS_GLOBAL_Periph.OTG_HS_GRSTCTL.AHBIDL) and Count < 2000 loop
+         Count := Count + 1;
       end loop;
 
       OTG_HS_GLOBAL_Periph.OTG_HS_GRSTCTL.CSRST := True;

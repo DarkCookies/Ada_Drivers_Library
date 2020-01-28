@@ -610,7 +610,7 @@ package body DWC_OTG_FS is
             others => <>);
 
          -- Out End Points --
-         for Ep in EP_Index loop
+         for Ep in Device_OEPCTL'Range loop
 
             if Device_OEPCTL (Ep).EPENA then
                Device_OEPCTL (Ep) := (EPDIS  => True,
